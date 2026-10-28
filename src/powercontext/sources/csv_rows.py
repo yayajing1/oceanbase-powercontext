@@ -84,11 +84,11 @@ def _decode_csv_records(content: bytes) -> list[list[str]]:
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
-        raise ValueError("CSV content must be valid UTF-8") from error
+        raise ValueError("CSV content must be valid UTF-8") from error  # noqa: TRY003
     try:
         return list(csv.reader(io.StringIO(text, newline=""), strict=True))
     except csv.Error as error:
-        raise ValueError(f"CSV content is malformed: {error}") from error
+        raise ValueError(f"CSV content is malformed: {error}") from error  # noqa: TRY003
 
 
 def _validated_header(header: list[str], primary_key: str) -> int:
