@@ -29,7 +29,7 @@ from pyobvector import AsyncOceanBaseDialect
 from sqlalchemy import Table
 from sqlalchemy.dialects import registry as dialect_registry
 from sqlalchemy.engine import URL
-from sqlalchemy.engine.interfaces import DBAPIConnection
+from sqlalchemy.engine.interfaces import DBAPIConnection, Dialect
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from typing_extensions import override
 
@@ -58,6 +58,12 @@ class _SeekDBInstance(Protocol):
     def connection_options(self) -> Mapping[str, object]: ...
 
     def close(self) -> None: ...
+
+
+def is_seekdb_dialect(dialect: Dialect, /) -> bool:
+    """Return whether a connection dialect is the embedded seekdb dialect."""
+
+    return isinstance(dialect, AsyncSeekDBDialect)
 
 
 class SeekDBUnavailableError(PersistenceError):
