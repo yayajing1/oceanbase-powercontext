@@ -2916,14 +2916,6 @@ class LifecycleApplication:
                     self._schema_ready = True
         return database
 
-    def require_database(self) -> AsyncDatabase:
-        """Return the owning database, or reject a Runtime without one."""
-
-        database = self._database
-        if database is None:
-            raise SourceLifecycleError("lifecycle-unavailable")
-        return database
-
 
 class ScopedLifecycleApplication:
     """Register dependencies and propagate Source availability inside one scope."""
@@ -3123,8 +3115,28 @@ class ScopedLifecycleApplication:
                         available=_initial_availability(nodes, parents, policy),
                     )
                     await repository.add_node(connection, self.scope_id, node)
-            await self._sync_memory_state((node,), reason=memory_reason("lifecycle registration"))
+            await self._propagate((node,), reason=memory_reason("lifecycle registration"))
         return None
+
+    async def _propagate(
+        self,
+        nodes: Sequence[LifecycleNode],
+        availability: Mapping[str, bool] | None = None,
+        *,
+        reason: str,
+    ) -> None:
+        """Apply one availability decision to the native projections.
+
+        A native write that fails leaves the recorded lifecycle state untouched,
+        so replaying the same event completes the propagation.
+        """
+
+        try:
+            await self._sync_memory_state(nodes, availability, reason=reason)
+        except SourceLifecycleError:
+            raise
+        except Exception as error:
+            raise SourceLifecycleError("propagation-failed", str(error)) from error
 
     async def _sync_memory_state(
         self,
