@@ -67,6 +67,7 @@ from powercontext.builtin.runtime.processing_contracts import (
     ArtifactProcessingWorkerOutcome,
     WorkerEntrypoint,
 )
+from powercontext.builtin.runtime.processing_discovery import scopes_over_source_count
 from powercontext.builtin.runtime.protocols import RuntimeTracing
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ _DISCOVERY_PAGE_SIZE = 100
 _RETRY_STATE_LIMIT = 1000
 _CHANNEL_QUEUE_LIMIT = _DISCOVERY_PAGE_SIZE // 2
 _DISCOVERY_PAGE_DELAY_SECONDS = 0.01
+_COUNT_DISCOVERY_INTERVAL_SECONDS = 0.5
 _DISCOVERY_TIMEOUT_SECONDS = 2.0
 _SPAWN_SIGTERM_GRACE_SECONDS = 1.0
 _WORKER_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -114,6 +116,10 @@ class ArtifactProcessingBinding:
     timezone: str = "Asia/Shanghai"
     config_prefix: str | None = None
     pending_provider: ArtifactProcessingPendingProvider | None = None
+    # A count threshold admits a Scope once enough new Source identities wait
+    # behind its own cursor. It is an alternative to the time condition, not a
+    # replacement for the per-read window limit.
+    automatic_count_threshold: int | None = None
     # Only automatic admission is filtered; already accepted requests retain
     # their own Worker authorization and domain completion semantics.
     automatic_scope_filter: Callable[[AsyncConnection, tuple[str, ...]], Awaitable[frozenset[str]]] | None = None
@@ -131,6 +137,15 @@ class ArtifactProcessingBinding:
             raise ValueError("max_workers must be a positive integer")  # noqa: TRY003
         if self.worker_timeout_seconds <= 0:
             raise ValueError("worker_timeout_seconds must be positive")  # noqa: TRY003
+        if self.automatic_count_threshold is not None and (
+            type(self.automatic_count_threshold) is not int or self.automatic_count_threshold < 1
+        ):
+            raise ValueError("automatic count threshold must be a positive integer")  # noqa: TRY003
+        self._validate_schedule()
+
+    def _validate_schedule(self) -> None:
+        """Keep the automatic schedule coherent with the cron expression."""
+
         if self.automatic_processing_interval is not None:
             if self.automatic_processing_interval.total_seconds() <= 0:
                 raise ValueError("automatic interval must be positive")  # noqa: TRY003
@@ -401,6 +416,7 @@ class _FamilyState:
     discovery_pending: bool = True
     next_schedule_at: float | None = None
     next_discovery_at: float = 0.0
+    schedule_due: bool = False
     automatic_next: bool = False
     overflow_not_before: float = 0.0
     degraded: bool = False
@@ -715,7 +731,9 @@ class ArtifactProcessingSupervisor:
         async with self._database.transaction() as connection:
             await self._leases.require_fence(connection, self._require_current_fence())
             persisted = await self._binding_states.load(connection, binding.binding_name, for_update=True)
-            enabled = binding.automatic_processing_interval is not None or binding.cron is not None
+            count_threshold = binding.automatic_count_threshold
+            schedule_enabled = binding.automatic_processing_interval is not None or binding.cron is not None
+            enabled = schedule_enabled or count_threshold is not None
             if not enabled:
                 if persisted is not None and persisted.scan_in_progress:
                     await self._binding_states.finish_scan(connection, binding.binding_name)
@@ -726,9 +744,20 @@ class ArtifactProcessingSupervisor:
                 if persisted is None or not persisted.scan_in_progress:
                     checkpoint = None if persisted is None else persisted.last_schedule_checkpoint_at
                     due, next_time = _schedule_deadline(binding, checkpoint, now)
-                    next_schedule_at = asyncio.get_running_loop().time() + max(0, (next_time - now).total_seconds())
                     if due is not None:
+                        next_schedule_at = asyncio.get_running_loop().time() + max(0, (next_time - now).total_seconds())
+                        state.schedule_due = schedule_enabled
                         persisted = await self._binding_states.start_scan(connection, binding.binding_name, due)
+                        scan_after = 0
+                    elif count_threshold is not None:
+                        # A count threshold keeps discovery alive between schedule
+                        # deadlines and leaves the schedule checkpoint untouched, so
+                        # the time condition still fires on its own deadline.
+                        next_schedule_at = asyncio.get_running_loop().time() + _COUNT_DISCOVERY_INTERVAL_SECONDS
+                        state.schedule_due = False
+                        persisted = await self._binding_states.start_scan(
+                            connection, binding.binding_name, checkpoint
+                        )
                         scan_after = 0
                 if persisted is not None and persisted.scan_in_progress:
                     scan_in_progress = True
@@ -754,6 +783,16 @@ class ArtifactProcessingSupervisor:
                     eligible = frozenset(candidates)
                     if candidates and binding.automatic_scope_filter is not None:
                         eligible &= await binding.automatic_scope_filter(connection, candidates)
+                    if eligible and count_threshold is not None and not state.schedule_due:
+                        # The count condition is an alternative to the time
+                        # condition: a Scope joins the wave only when enough new
+                        # Source identities wait behind its own cursor.
+                        eligible &= await scopes_over_source_count(
+                            connection,
+                            binding.binding_name,
+                            tuple(eligible),
+                            count_threshold,
+                        )
                     for row in rows:
                         # A full page of ineligible rows still advances discovery;
                         # keep their dirty Source and request counters untouched.
