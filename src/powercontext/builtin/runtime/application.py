@@ -71,6 +71,7 @@ from powercontext.builtin.artifacts.memory.errors import (
     CapabilityNotSupportedError,
     InvalidMemoryCitationError,
     MemoryEntryNotFoundError,
+    MemoryLayerError,
     MemoryWriteRejectedError,
 )
 from powercontext.builtin.artifacts.profile.service import RelationalProfileService
@@ -143,7 +144,11 @@ from powercontext.builtin.persistence.artifact_governance import (
     ArtifactGovernance,
     ArtifactLifecycleState,
 )
+from powercontext.builtin.persistence.database import AsyncDatabase
+from powercontext.builtin.persistence.lifecycle import LifecycleNode, LifecycleRepository
+from powercontext.builtin.persistence.schema import create_tables
 from powercontext.builtin.persistence.skill_publications import SkillPublication
+from powercontext.builtin.persistence.tables import LIFECYCLE_TABLES
 from powercontext.builtin.publication import ArtifactPublicationApplication
 from powercontext.builtin.records import (
     ArtifactCreated,
@@ -151,6 +156,7 @@ from powercontext.builtin.records import (
     ArtifactRecordPage,
     ArtifactRevisionPage,
     ArtifactWrite,
+    BaseAccessError,
     BaseValueConflictError,
     LogicalArtifactRecord,
     RecordService,
@@ -166,6 +172,7 @@ from powercontext.builtin.runtime._scope_cache import (
     ScopeCacheObserver,
     ScopeEvictor,
 )
+from powercontext.builtin.runtime.context_pack import ContextPack, ContextPackDelta, align_context_pack
 from powercontext.builtin.runtime.decision_model import DecisionModel
 from powercontext.builtin.runtime.errors import InvalidRuntimeRequestError, TopicMemoryProcessingUnavailableError
 from powercontext.builtin.runtime.models import (
@@ -247,6 +254,23 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     RecallSufficiencyPolicy,
     build_recall_candidates,
     recall_effort,
+)
+from powercontext.builtin.runtime.source_lifecycle import (
+    LIFECYCLE_PURPOSE_GENERATION,
+    LIFECYCLE_PURPOSES,
+    LifecycleReference,
+    SourceLifecycleError,
+    SourceLifecycleEvent,
+    available_node_ids,
+    compute_availability,
+    decode_reference,
+    encode_reference,
+    event_record,
+    memory_reason,
+    node_binding,
+    same_event,
+    validate_parents,
+    validate_policy,
 )
 from powercontext.builtin.runtime.statistics import RelationalScopedStatistics, overview_selection
 from powercontext.builtin.scope import ScopeApplication, ScopeDescriptor, ScopeSelection
@@ -846,6 +870,29 @@ class ScopedContextApplication:
             if authorize_scopes is not None:
                 await authorize_scopes((self.scope_id, *scope.context_references))
             return await self._prepare(request, scope)
+
+    async def prepare_incremental(
+        self,
+        request: PrepareContextRequest,
+        /,
+        *,
+        base_pack: ContextPack | None = None,
+        authorize_scopes: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
+    ) -> ContextPack | ContextPackDelta:
+        """Prepare this turn's context as a complete pack or as a prefix-reuse delta.
+
+        The prepared body and its citations stay identical to :meth:`prepare`.
+        Without a base pack the caller receives the complete pack; with one it
+        receives a delta that a receiver can apply to that base pack to rebuild
+        exactly the same body.
+        """
+
+        prepared = await self.prepare(request, authorize_scopes=authorize_scopes)
+        content = prepared.content if prepared.content is not None else ""
+        if base_pack is None:
+            return ContextPack.from_content(content)
+        target = align_context_pack(base_pack, content)
+        return ContextPackDelta.between(base_pack, target)
 
     async def _prepare(self, request: PrepareContextRequest, scope: ScopeDescriptor, /) -> PreparedContext:
         build, effort = await self._prepare_build(request, scope)
@@ -2667,6 +2714,7 @@ class ScopedTopicMemoryApplication:
                     query_embedding,
                     embedding_timeout_seconds,
                 )
+        result = await self._exclude_withdrawn_topics(result)
         observer = self._runtime._topic_memory_search_observer
         if observer is not None:
             try:
@@ -2684,6 +2732,22 @@ class ScopedTopicMemoryApplication:
                     },
                 )
         return result
+
+    async def _exclude_withdrawn_topics(self, result: TopicMemorySearchResult) -> TopicMemorySearchResult:
+        """Keep Topics that lost their support out of the native search result.
+
+        The Topic family has no per-entry state of its own, so the Source
+        lifecycle owns the availability decision. The published artifact stays
+        readable; only its use as generation evidence follows the lifecycle.
+        """
+
+        unavailable = await self._runtime.lifecycle.for_scope(self.scope_id).unavailable_topic_ids()
+        if not unavailable:
+            return result
+        hits = tuple(hit for hit in result.hits if hit.artifact_ref.artifact_id not in unavailable)
+        if len(hits) == len(result.hits):
+            return result
+        return result.model_copy(update={"hits": hits})
 
     async def _search_with_embedding(
         self,
@@ -2811,6 +2875,304 @@ class TopicMemoryApplication:
 
     def for_scope(self, scope_id: str, /) -> ScopedTopicMemoryApplication:
         return ScopedTopicMemoryApplication(self._runtime, scope_id)
+
+
+class LifecycleApplication:
+    """Select the scoped Source lifecycle application service."""
+
+    def __init__(self, runtime: BuiltinRuntime, database: AsyncDatabase | None) -> None:
+        self._runtime = runtime
+        self._database = database
+        self._repository = LifecycleRepository()
+        self._schema_ready = False
+        self._schema_lock = asyncio.Lock()
+
+    @property
+    def runtime(self) -> BuiltinRuntime:
+        """Return the Runtime that owns this lifecycle service."""
+
+        return self._runtime
+
+    @property
+    def repository(self) -> LifecycleRepository:
+        """Return the relational store behind this lifecycle service."""
+
+        return self._repository
+
+    def for_scope(self, scope_id: str, /) -> ScopedLifecycleApplication:
+        return ScopedLifecycleApplication(self, scope_id)
+
+    async def ensure_schema(self) -> AsyncDatabase | None:
+        """Create the lifecycle tables once, then return the owning database."""
+
+        database = self._database
+        if database is None:
+            return None
+        if not self._schema_ready:
+            async with self._schema_lock:
+                if not self._schema_ready:
+                    async with database.transaction() as connection:
+                        await create_tables(connection, LIFECYCLE_TABLES)
+                    self._schema_ready = True
+        return database
+
+    def require_database(self) -> AsyncDatabase:
+        """Return the owning database, or reject a Runtime without one."""
+
+        database = self._database
+        if database is None:
+            raise SourceLifecycleError("lifecycle-unavailable")
+        return database
+
+
+class ScopedLifecycleApplication:
+    """Register dependencies and propagate Source availability inside one scope."""
+
+    def __init__(self, application: LifecycleApplication, scope_id: str) -> None:
+        self._application = application
+        self._runtime = application.runtime
+        self.scope_id = validate_scope_id(scope_id)
+
+    async def register_source(self, node_id: str, source_ref: SourceRef, revision: int) -> None:
+        """Register one Source root with the lifecycle revision it reports."""
+
+        identity = _lifecycle_node_id(node_id)
+        if not isinstance(source_ref, SourceRef):
+            raise SourceLifecycleError("invalid-source-reference", type(source_ref).__name__)
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise SourceLifecycleError("invalid-revision", str(revision))
+        await self._require_source(source_ref)
+        await self._register(
+            node_id=identity,
+            family="source",
+            parents=(),
+            policy="all",
+            reference=source_ref,
+            revision=revision,
+            entry_id=None,
+            artifact_id=None,
+        )
+
+    async def register_memory(
+        self,
+        node_id: str,
+        citation: MemoryCitation,
+        parents: Sequence[str],
+        policy: str,
+    ) -> None:
+        """Register one Memory entry with the dependencies that support it."""
+
+        identity = _lifecycle_node_id(node_id)
+        if not isinstance(citation, MemoryCitation):
+            raise SourceLifecycleError("invalid-memory-citation", type(citation).__name__)
+        resolved_parents = validate_parents(parents)
+        resolved_policy = validate_policy(policy)
+        await self._require_memory(citation)
+        await self._register(
+            node_id=identity,
+            family="memory",
+            parents=resolved_parents,
+            policy=resolved_policy,
+            reference=citation,
+            revision=1,
+            entry_id=citation.entry_id,
+            artifact_id=None,
+        )
+
+    async def register_topic(
+        self,
+        node_id: str,
+        artifact_ref: ArtifactRef,
+        parents: Sequence[str],
+        policy: str,
+    ) -> None:
+        """Register one Topic Memory artifact with the dependencies that support it."""
+
+        identity = _lifecycle_node_id(node_id)
+        if not isinstance(artifact_ref, ArtifactRef):
+            raise SourceLifecycleError("invalid-topic-reference", type(artifact_ref).__name__)
+        resolved_parents = validate_parents(parents)
+        resolved_policy = validate_policy(policy)
+        await self._require_topic(artifact_ref)
+        await self._register(
+            node_id=identity,
+            family="topic",
+            parents=resolved_parents,
+            policy=resolved_policy,
+            reference=artifact_ref,
+            revision=1,
+            entry_id=None,
+            artifact_id=artifact_ref.artifact_id,
+        )
+
+    async def apply(self, event: SourceLifecycleEvent) -> list[str]:
+        """Apply one Source availability event and return every available node."""
+
+        async with self._runtime._scoped_operation(self.scope_id), self._runtime._locked(self.scope_id):
+            return await self._apply(event)
+
+    async def resolve(self, node_id: str, purpose: str) -> LifecycleReference:
+        """Return the reference bound to one node for the requested use."""
+
+        if purpose not in LIFECYCLE_PURPOSES:
+            raise SourceLifecycleError("unknown-purpose", purpose)
+        identity = _lifecycle_node_id(node_id)
+        database = await self._application.ensure_schema()
+        if database is None:
+            raise SourceLifecycleError("lifecycle-unavailable")
+        async with database.transaction() as connection:
+            node = await self._application.repository.get_node(connection, self.scope_id, identity)
+        if node is None:
+            raise SourceLifecycleError("unknown-node", identity)
+        if purpose == LIFECYCLE_PURPOSE_GENERATION and not node.available:
+            raise SourceLifecycleError("unavailable-node", identity)
+        return decode_reference(node.reference)
+
+    async def unavailable_topic_ids(self) -> frozenset[str]:
+        """Return the Topic artifacts that currently lost their support."""
+
+        database = await self._application.ensure_schema()
+        if database is None:
+            return frozenset()
+        async with database.transaction() as connection:
+            return await self._application.repository.unavailable_artifact_ids(
+                connection,
+                self.scope_id,
+                "topic",
+            )
+
+    async def _apply(self, event: SourceLifecycleEvent) -> list[str]:
+        database = await self._application.ensure_schema()
+        if database is None:
+            raise SourceLifecycleError("lifecycle-unavailable")
+        repository = self._application.repository
+        async with database.transaction() as connection:
+            nodes = await repository.list_nodes(connection, self.scope_id)
+            source = next((node for node in nodes if node.node_id == event.node_id), None)
+            if source is None:
+                raise SourceLifecycleError("unknown-source", event.node_id)
+            if source.family != "source":
+                raise SourceLifecycleError("not-a-source", event.node_id)
+            if source.revision != event.revision:
+                raise SourceLifecycleError("revision-mismatch", event.node_id)
+            recorded = await repository.get_event(connection, self.scope_id, event.node_id, event.sequence)
+            if recorded is not None:
+                if not same_event(recorded, event):
+                    raise SourceLifecycleError("sequence-conflict", event.node_id)
+                return available_node_ids({node.node_id: node.available for node in nodes})
+            applied = await repository.list_events(connection, self.scope_id, event.node_id)
+            if applied and event.sequence <= applied[-1].sequence:
+                raise SourceLifecycleError("sequence-regression", event.node_id)
+            availability = compute_availability(nodes, {event.node_id: event.available})
+        await self._propagate(nodes, availability, reason=memory_reason(event.reason))
+        async with database.transaction() as connection:
+            await repository.set_availability(connection, self.scope_id, availability)
+            await repository.record_event(connection, self.scope_id, event_record(event))
+        return available_node_ids(availability)
+
+    async def _register(
+        self,
+        *,
+        node_id: str,
+        family: str,
+        parents: tuple[str, ...],
+        policy: str,
+        reference: LifecycleReference,
+        revision: int,
+        entry_id: str | None,
+        artifact_id: str | None,
+    ) -> None:
+        database = await self._application.ensure_schema()
+        if database is None:
+            raise SourceLifecycleError("lifecycle-unavailable")
+        repository = self._application.repository
+        encoded = encode_reference(reference)
+        async with self._runtime._scoped_operation(self.scope_id), self._runtime._locked(self.scope_id):
+            async with database.transaction() as connection:
+                existing = await repository.get_node(connection, self.scope_id, node_id)
+                if existing is not None:
+                    candidate = LifecycleNode(
+                        node_id=node_id,
+                        family=family,
+                        policy=policy,
+                        parents=parents,
+                        reference=encoded,
+                        entry_id=entry_id,
+                        artifact_id=artifact_id,
+                        revision=revision,
+                        ordinal=existing.ordinal,
+                        available=existing.available,
+                    )
+                    if node_binding(existing) != node_binding(candidate):
+                        raise SourceLifecycleError("binding-conflict", node_id)
+                    node = existing
+                else:
+                    nodes = await repository.list_nodes(connection, self.scope_id)
+                    _require_known_parents(nodes, parents, node_id)
+                    ordinal = max((item.ordinal for item in nodes), default=0) + 1
+                    node = LifecycleNode(
+                        node_id=node_id,
+                        family=family,
+                        policy=policy,
+                        parents=parents,
+                        reference=encoded,
+                        entry_id=entry_id,
+                        artifact_id=artifact_id,
+                        revision=revision,
+                        ordinal=ordinal,
+                        available=_initial_availability(nodes, parents, policy),
+                    )
+                    await repository.add_node(connection, self.scope_id, node)
+            await self._sync_memory_state((node,), reason=memory_reason("lifecycle registration"))
+        return None
+
+    async def _sync_memory_state(
+        self,
+        nodes: Sequence[LifecycleNode],
+        availability: Mapping[str, bool] | None = None,
+        *,
+        reason: str,
+    ) -> None:
+        """Match every registered Memory entry with the availability of its node."""
+
+        targets: dict[str, bool] = {}
+        for node in nodes:
+            if node.family != "memory" or node.entry_id is None:
+                continue
+            available = node.available if availability is None else availability.get(node.node_id, node.available)
+            targets[node.entry_id] = targets.get(node.entry_id, True) and available
+        if not targets:
+            return
+        async with self._runtime._context(self.scope_id) as context:
+            service = context.artifacts.memory
+            artifact_id = context.artifacts.memory_artifact_id
+            for entry_id, available in targets.items():
+                await _apply_entry_state(service, artifact_id, entry_id, available, reason)
+
+    async def _require_source(self, source_ref: SourceRef) -> None:
+        try:
+            await self._runtime.records.for_scope(self.scope_id).get_source(
+                source_ref.source_type,
+                source_ref.source_id,
+            )
+        except (LookupError, ValueError, BaseAccessError) as error:
+            raise SourceLifecycleError("unreadable-source", source_ref.source_id) from error
+
+    async def _require_memory(self, citation: MemoryCitation) -> None:
+        try:
+            await self._runtime.memory.for_scope(self.scope_id).get(GetMemoryEntryRequest(citation=citation))
+        except (LookupError, ValueError, BaseAccessError, MemoryLayerError) as error:
+            raise SourceLifecycleError("unreadable-memory", citation.entry_id) from error
+
+    async def _require_topic(self, artifact_ref: ArtifactRef) -> None:
+        try:
+            await self._runtime.records.for_scope(self.scope_id).get_artifact_revision(
+                artifact_ref.family,
+                artifact_ref.artifact_id,
+                artifact_ref.revision,
+            )
+        except (LookupError, ValueError, BaseAccessError) as error:
+            raise SourceLifecycleError("unreadable-topic", artifact_ref.artifact_id) from error
 
 
 class ScheduledSourceProcessor:
@@ -3110,6 +3472,7 @@ class BuiltinRuntime:
         self.work = WorkApplication(self)
         self.memory = MemoryApplication(self)
         self.topic_memory = TopicMemoryApplication(self)
+        self.lifecycle = LifecycleApplication(self, _lifecycle_database(provider))
         self.records = RecordApplication(self)
         self.prompts = PromptApplication(self)
         self.review = ReviewApplication(self)
@@ -3601,3 +3964,75 @@ async def _last_changed_entry(service: MemoryService, memory: Memory) -> MemoryE
     entry_id = memory.content.changes[-1].entry_id
     entry = next((item for item in await service.entries(memory) if item.entry_id == entry_id), None)
     return None if entry is None else _entry_record(memory, entry)
+
+
+def _lifecycle_node_id(node_id: str) -> str:
+    """Return one registered node identity, or reject an unusable one."""
+
+    if not isinstance(node_id, str) or not node_id.strip():
+        raise SourceLifecycleError("invalid-node-id", repr(node_id))
+    return node_id
+
+
+def _lifecycle_database(provider: object) -> AsyncDatabase | None:
+    """Return the database a composed provider owns, when it exposes one."""
+
+    candidate = getattr(provider, "database", None)
+    return candidate if isinstance(candidate, AsyncDatabase) else None
+
+
+def _require_known_parents(nodes: Sequence[LifecycleNode], parents: Sequence[str], node_id: str) -> None:
+    """Reject a parent that was never registered, including the node itself."""
+
+    known = {node.node_id for node in nodes}
+    for parent in parents:
+        if parent == node_id:
+            raise SourceLifecycleError("self-dependency", node_id)
+        if parent not in known:
+            raise SourceLifecycleError("unknown-parent", parent)
+
+
+def _initial_availability(
+    nodes: Sequence[LifecycleNode],
+    parents: Sequence[str],
+    policy: str,
+) -> bool:
+    """Compute a derived node state from the parents that exist right now."""
+
+    current = {node.node_id: node.available for node in nodes}
+    support = [current.get(parent, False) for parent in parents]
+    return all(support) if policy == "all" else any(support)
+
+
+async def _apply_entry_state(
+    service: MemoryService,
+    artifact_id: str,
+    entry_id: str,
+    available: bool,
+    reason: str,
+) -> None:
+    """Move one Memory entry between the active and the inactive state."""
+
+    memory = await _memory_head(service, artifact_id)
+    if memory is None:
+        return
+    manifest = {item.entry_id: item for item in memory.content.manifest.entries}
+    current = manifest.get(entry_id)
+    if current is None or (current.state == "active") == available:
+        return
+    entry = next((item for item in await service.entries(memory) if item.entry_id == entry_id), None)
+    if entry is None:
+        return
+    if available:
+        await service.reactivate(memory, entries=(entry,), reason=reason)
+    else:
+        await service.forget(memory, entries=(entry,), reason=reason)
+
+
+async def _memory_head(service: MemoryService, artifact_id: str) -> Memory | None:
+    """Return the current Memory head, or nothing when the Scope has no Memory."""
+
+    try:
+        return await service.head(artifact_id)
+    except (LookupError, MemoryLayerError):
+        return None
