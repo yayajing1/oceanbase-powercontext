@@ -16,14 +16,18 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from powercontext.builtin.persistence.cursors import SourceCursorRepository
 from powercontext.builtin.persistence.database import AsyncDatabase
 from powercontext.builtin.persistence.processing_intents import ArtifactProcessingIntentRepository
 from powercontext.builtin.persistence.supervision import ArtifactProcessingFence, ArtifactProcessingLeaseRepository
-from powercontext.builtin.persistence.tables import PROFILE_POLICIES_TABLE, SOURCE_JOURNAL_HEADS_TABLE
+from powercontext.builtin.persistence.tables import (
+    PROFILE_POLICIES_TABLE,
+    SOURCE_JOURNAL_HEADS_TABLE,
+    SOURCES_TABLE,
+)
 
 
 async def enabled_profile_scopes(connection: AsyncConnection, scope_ids: tuple[str, ...]) -> frozenset[str]:
@@ -43,6 +47,36 @@ async def enabled_profile_scopes(connection: AsyncConnection, scope_ids: tuple[s
         .with_for_update()
     )
     return frozenset(rows)
+
+
+async def scopes_over_source_count(
+    connection: AsyncConnection,
+    binding_name: str,
+    scope_ids: tuple[str, ...],
+    threshold: int,
+) -> frozenset[str]:
+    """Return the Scopes whose pending Source count reaches the threshold.
+
+    The count uses the persisted journal identities that follow the processor's
+    own cursor, so a repeated capture of one identity and a receipt trust
+    upgrade never change it. Only journal metadata is read.
+    """
+    if not scope_ids or threshold < 1:
+        return frozenset()
+    cursors = SourceCursorRepository()
+    stored = await cursors.load_many(connection, scope_ids, binding_name)
+    conditions = []
+    for scope_id in scope_ids:
+        row = stored.get(scope_id)
+        consumed = 0 if row is None else row.cursor.sequence
+        conditions.append(and_(SOURCES_TABLE.c.scope_id == scope_id, SOURCES_TABLE.c.journal_position > consumed))
+    if not conditions:
+        return frozenset()
+    statement = (
+        select(SOURCES_TABLE.c.scope_id, func.count()).where(or_(*conditions)).group_by(SOURCES_TABLE.c.scope_id)
+    )
+    rows = (await connection.execute(statement)).all()
+    return frozenset(str(scope_id) for scope_id, count in rows if int(count) >= threshold)
 
 
 class SourceProcessingPendingProvider:
