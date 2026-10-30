@@ -228,12 +228,19 @@ class ContextAssembly(_PreparedContextModel):
 
 
 class PrepareContextRequest(_PreparedContextModel):
-    """Prepare bounded context for one Agent turn."""
+    """Prepare bounded context for one Agent turn.
+
+    ``evidence_selection`` turns on the fragment-selection mode. When it is set, the
+    Builder answers ``query`` with literal fragments taken from the recalled Memory
+    candidates instead of whole entries, and each fragment keeps its exact entry version
+    and character range. It is off by default, so an ordinary prepare is unchanged.
+    """
 
     query: Annotated[str, Field(min_length=1, max_length=8192)]
     max_bytes: Annotated[int, Field(ge=512, le=32768)] = 8000
     assembly: ContextAssembly | None = None
     include_code: bool = Field(default=False, strict=True)
+    evidence_selection: bool = Field(default=False, strict=True)
 
     @model_validator(mode="before")
     @classmethod
