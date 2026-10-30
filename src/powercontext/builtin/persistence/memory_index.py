@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -55,6 +55,24 @@ def memory_channel_hits(
         for row in rows
         if str(row["memory_artifact_id"]) in requested
     )
+
+
+@runtime_checkable
+class HybridMemoryIndex(Protocol):
+    """An index able to answer both search channels with one statement.
+
+    ``search_hybrid`` returns ``None`` when the connection cannot serve the
+    combined statement, which lets the caller fall back to one statement per
+    channel instead of failing the search.
+    """
+
+    async def search_hybrid(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        request: MemorySearchRequest,
+        /,
+    ) -> MemorySearchChannels | None: ...
 
 
 class MemoryIndex(Protocol):
@@ -202,6 +220,7 @@ class CompositeMemoryIndex:
             tag_filter=all(index.capabilities.tag_filter for index in indexes),
         )
         self.tables = tuple(table for index in indexes for table in index.tables)
+        self._hybrid_index = next((index for index in indexes if isinstance(index, HybridMemoryIndex)), None)
 
     async def initialize(self, connection: AsyncConnection, /) -> None:
         for index in self.indexes:
@@ -247,6 +266,10 @@ class CompositeMemoryIndex:
         request: MemorySearchRequest,
         /,
     ) -> MemorySearchChannels:
+        if request.mode == "hybrid" and self._hybrid_index is not None:
+            channels = await self._hybrid_index.search_hybrid(connection, scope_id, request)
+            if channels is not None:
+                return channels
         fts: tuple[MemoryChannelHit, ...] = ()
         vector: tuple[MemoryChannelHit, ...] = ()
         for index in self.indexes:
