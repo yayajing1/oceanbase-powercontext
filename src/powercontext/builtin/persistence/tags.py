@@ -81,8 +81,12 @@ def tag_predicate(
     return count == len(tag_filter.keys) if tag_filter.match == "all" else count > 0
 
 
-def memory_tag_sql(alias: Literal["f", "m"]) -> str:
-    """A parameterized predicate for native FTS/vector SQL (aliases are internal)."""
+def memory_tag_sql(alias: Literal["f", "h", "m"]) -> str:
+    """A parameterized predicate for native FTS/vector SQL (aliases are internal).
+
+    ``f`` is the SQLite full-text projection, ``h`` the OceanBase-family entry
+    head projection and ``m`` the vector projection.
+    """
 
     return """
       AND (SELECT COUNT(*) FROM pc_artifact_tags AS tags
