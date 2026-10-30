@@ -52,6 +52,7 @@ from powercontext.builtin.runtime.application import (
     ExperienceApplication,
     ExternalSkillApplication,
     HandoffApplication,
+    LifecycleApplication,
     MemoryApplication,
     RemoteIngestionApplication,
     RemoteSkillApplication,
@@ -61,6 +62,7 @@ from powercontext.builtin.runtime.application import (
     ScopedExperienceApplication,
     ScopedExternalSkillApplication,
     ScopedHandoffApplication,
+    ScopedLifecycleApplication,
     ScopedMemoryApplication,
     ScopedReviewApplication,
     ScopedSkillApplication,
@@ -182,6 +184,10 @@ from powercontext.builtin.runtime.readiness import (
     RuntimeReadinessStatus,
     dependency_readiness_probe,
 )
+from powercontext.builtin.runtime.source_lifecycle import (
+    SourceLifecycleError,
+    SourceLifecycleEvent,
+)
 from powercontext.builtin.statistics import (
     ArtifactInventoryStatistics,
     CandidateFamilyCount,
@@ -283,6 +289,7 @@ __all__ = [
     "InferenceConfig",
     "InvalidRuntimeRequestError",
     "InventoryStatistics",
+    "LifecycleApplication",
     "ListArtifactCandidatesRequest",
     "ListDreamRunsRequest",
     "ListExternalSkillsRequest",
@@ -352,6 +359,7 @@ __all__ = [
     "ScopedExperienceApplication",
     "ScopedExternalSkillApplication",
     "ScopedHandoffApplication",
+    "ScopedLifecycleApplication",
     "ScopedMemoryApplication",
     "ScopedReviewApplication",
     "ScopedSkillApplication",
@@ -366,6 +374,8 @@ __all__ = [
     "SkillGenerationOrigin",
     "SourceApplication",
     "SourceInventoryStatistics",
+    "SourceLifecycleError",
+    "SourceLifecycleEvent",
     "SourceReceipt",
     "SpawnArtifactProcessingWorkerLauncher",
     "Statistics",
