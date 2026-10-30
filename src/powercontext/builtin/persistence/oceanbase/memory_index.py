@@ -43,6 +43,8 @@ from powercontext.builtin.artifacts.memory import (
 )
 from powercontext.builtin.artifacts.memory.canonical import embedding_content_hash, validate_embedding
 from powercontext.builtin.persistence.memory_index import memory_channel_hits
+from powercontext.builtin.persistence.seekdb.memory_index import search_hybrid_candidates
+from powercontext.builtin.persistence.seekdb.profile import is_seekdb_dialect
 from powercontext.builtin.persistence.tables import (
     ARTIFACT_HEADS_TABLE,
     MAX_MEMORY_ENTRY_ID_LENGTH,
@@ -393,6 +395,28 @@ class OceanBaseMemoryVectorIndex:
             )
         ).mappings()
         return MemorySearchChannels(vector=memory_channel_hits(rows, request.memories))
+
+    async def search_hybrid(
+        self,
+        connection: AsyncConnection,
+        scope_id: str,
+        request: MemorySearchRequest,
+        /,
+    ) -> MemorySearchChannels | None:
+        """Serve both candidate channels from one statement where the dialect allows it.
+
+        The embedded seekdb dialect runs the full-text and the vector branch in a
+        single statement so the candidate query costs one round trip. Other
+        OceanBase-family connections keep one statement per channel.
+        """
+
+        if request.mode != "hybrid" or not is_seekdb_dialect(connection.dialect):
+            return None
+        if request.embedding_profile != self.profile or request.query_vector is None:
+            raise CapabilityNotSupportedError("embedding-profile")
+        if not await self.vector_complete(connection, scope_id, request.memories, self.profile):
+            raise CapabilityNotSupportedError("vector")
+        return await search_hybrid_candidates(connection, scope_id, request, profile=self.profile)
 
     async def vector_complete(
         self,
