@@ -1180,6 +1180,61 @@ RECURRENCE_OBSERVATION_TABLE = Table(
 
 RECURRENCE_TABLES = (RECURRENCE_MATCH_TABLE, RECURRENCE_OBSERVATION_TABLE)
 
+# Source lifecycle tables are created on first use instead of joining BUILTIN_TABLES,
+# so the deployment schema of every existing family stays exactly as it was.
+SOURCE_LIFECYCLE_NODES_TABLE = Table(
+    "pc_source_lifecycle_nodes",
+    SHARED_METADATA,
+    Column("scope_id", identity_string(MAX_SCOPE_ID_LENGTH), primary_key=True),
+    Column("node_id", identity_string(MAX_SCOPE_ID_LENGTH), primary_key=True),
+    Column("family", identity_string(16), nullable=False),
+    Column("policy", identity_string(8), nullable=False),
+    Column("parents", _canonical_payload_type(), nullable=False),
+    Column("reference", _canonical_payload_type(), nullable=False),
+    Column("entry_id", identity_string(MAX_MEMORY_ENTRY_ID_LENGTH)),
+    Column("artifact_id", identity_string(MAX_ARTIFACT_ID_LENGTH)),
+    Column("revision", Integer, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("available", Boolean, nullable=False),
+    CheckConstraint(
+        "family IN ('source', 'memory', 'topic')",
+        name="ck_pc_source_lifecycle_nodes_family",
+    ),
+    CheckConstraint(
+        "policy IN ('all', 'any')",
+        name="ck_pc_source_lifecycle_nodes_policy",
+    ),
+    CheckConstraint(
+        "revision > 0",
+        name="ck_pc_source_lifecycle_nodes_revision_positive",
+    ),
+    CheckConstraint(
+        "ordinal > 0",
+        name="ck_pc_source_lifecycle_nodes_ordinal_positive",
+    ),
+)
+
+SOURCE_LIFECYCLE_EVENTS_TABLE = Table(
+    "pc_source_lifecycle_events",
+    SHARED_METADATA,
+    Column("scope_id", identity_string(MAX_SCOPE_ID_LENGTH), primary_key=True),
+    Column("node_id", identity_string(MAX_SCOPE_ID_LENGTH), primary_key=True),
+    Column("sequence", Integer, primary_key=True),
+    Column("revision", Integer, nullable=False),
+    Column("available", Boolean, nullable=False),
+    Column("reason", _entry_text_type(), nullable=False),
+    CheckConstraint(
+        "sequence > 0",
+        name="ck_pc_source_lifecycle_events_sequence_positive",
+    ),
+    CheckConstraint(
+        "revision > 0",
+        name="ck_pc_source_lifecycle_events_revision_positive",
+    ),
+)
+
+LIFECYCLE_TABLES = (SOURCE_LIFECYCLE_NODES_TABLE, SOURCE_LIFECYCLE_EVENTS_TABLE)
+
 BUILTIN_TABLES = (
     SCOPE_TABLES
     + SHARED_TABLES
