@@ -744,9 +744,9 @@ class ArtifactProcessingSupervisor:
                 if persisted is None or not persisted.scan_in_progress:
                     checkpoint = None if persisted is None else persisted.last_schedule_checkpoint_at
                     due, next_time = _schedule_deadline(binding, checkpoint, now)
-                    if due is not None:
+                    if due is not None and schedule_enabled:
                         next_schedule_at = asyncio.get_running_loop().time() + max(0, (next_time - now).total_seconds())
-                        state.schedule_due = schedule_enabled
+                        state.schedule_due = True
                         persisted = await self._binding_states.start_scan(connection, binding.binding_name, due)
                         scan_after = 0
                     elif count_threshold is not None:
@@ -807,10 +807,19 @@ class ArtifactProcessingSupervisor:
                     if not scan_in_progress:
                         await self._binding_states.finish_scan(connection, binding.binding_name)
                         scan_after = 0
-                        # Starting a scan established its checkpoint, so a
-                        # completed page must not restart the interval here.
-                        _, next_time = _schedule_deadline(binding, persisted.last_schedule_checkpoint_at, now)
-                        next_schedule_at = asyncio.get_running_loop().time() + max(0, (next_time - now).total_seconds())
+                        if schedule_enabled:
+                            # Starting a scan established its checkpoint, so a
+                            # completed page must not restart the interval here.
+                            _, next_time = _schedule_deadline(binding, persisted.last_schedule_checkpoint_at, now)
+                            next_schedule_at = asyncio.get_running_loop().time() + max(
+                                0, (next_time - now).total_seconds()
+                            )
+                        else:
+                            # A count-only binding has no time deadline. Without a
+                            # time condition the deadline would land on the current
+                            # instant and rescan in a tight loop, so the next pass
+                            # waits for the count discovery interval instead.
+                            next_schedule_at = asyncio.get_running_loop().time() + _COUNT_DISCOVERY_INTERVAL_SECONDS
                     else:
                         next_discovery_at = asyncio.get_running_loop().time() + _DISCOVERY_PAGE_DELAY_SECONDS
         state.scan_after = scan_after
