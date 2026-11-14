@@ -125,6 +125,29 @@ python validation/run_validation.py
 
 ---
 
-## 6. 已知限制
+## 6. 扩展能力（题面列为非必做项）
+
+| 能力 | 实现情况 |
+| --- | --- |
+| 规格变更处理 | 导入按 `doc_id` 幂等覆盖，文件内消失的旧条目自动删除；规格改版后重新导入即生效（验证步骤 13–18 完整覆盖往返） |
+| 跨会话任务恢复 | 任务状态存在 PowerContext 的 SQLite 文件里，换进程、换终端都能读回，并作为「上一轮的任务状态」进入下一轮提示词 |
+| 跨模块协作 | 模块不绑定任何特定 Agent：`context` 输出 Markdown / JSON，`run` 输出结构化报告，任何宿主（CLI、CI、Agent 插件）都能直接调用 |
+| 成本与时延 | 一次上下文构建 = 7 条 SQL、约 **235–265 ms**（本机 3 次实测），全部匹配在数据库内完成（`TEXT RETRIEVAL SCAN`）；模型侧的 input / output token 与耗时逐次留档在 `records/minimax/` |
+
+## 7. 第三方与来源
+
+| 内容 | 来源 | 说明 |
+| --- | --- | --- |
+| `powercontext` | [oceanbase/powercontext](https://github.com/oceanbase/powercontext)，Apache-2.0 | **未修改**，通过 PyPI 安装并用公开 SDK（`open_builtin_runtime`）调用 |
+| `pymysql` / `httpx` / `pyyaml` / `pytest` | PyPI | 仅作为运行依赖 |
+| `docker-compose.oceanbase.yaml` | 镜像 `ghcr.io/oceanbase/oceanbase-ce:4.3.5.6-...` | 只引用官方镜像，未内嵌任何 OceanBase 代码或数据 |
+| `demo_project/`（orderbook） | 本作品原创 | 小型业务工程，规格、代码与测试均为本次编写 |
+| `sdd_context/` | 本作品原创 | 上下文模块全部代码 |
+| 规格条目、任务描述、验证样例 | 本作品原创 | 任务与规格为本次设计，不含任何私有资料 |
+
+模型仅接收本作品自己的规格、代码与测试内容；本次开发**没有**向任何在线模型发送
+仓库中的第三方源码。
+
+## 8. 已知限制
 
 见 [`RUN.md` §11](RUN.md#11-已知限制)。

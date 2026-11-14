@@ -19,8 +19,21 @@
 
 | 日志 | 结果 | 说明 |
 | --- | --- | --- |
-| `validation-20261114-165205.json` | **19/19 通过** | 最终验证（对应 `records/minimax/TASK-ORD-003_20261114-165211_*`） |
+| `validation-clean-clone-20261114-165844.json` | **19/19 通过** | **干净克隆** `yayajing1/oceanbase-powercontext@2026-competition-ecosystem`（commit `96e48297`）后重跑，代码版本字段即该 commit |
+| `validation-20261114-165205.json` | **19/19 通过** | 开发目录中的最终验证 |
 | `validation-20261114-164738.json` | 18/19 | 上一轮：补丁锚点过严导致补丁未应用（已修复） |
 | `validation-20261114-164415.json` | 16/19 | 更早一轮：状态读取的分页参数越界（已修复） |
 
 后两份是迭代过程中真实产生的失败记录，保留下来是为了说明问题是如何被发现和修复的。
+
+干净克隆的复现方式：
+
+```bash
+git clone --depth 1 --branch 2026-competition-ecosystem \
+    https://github.com/yayajing1/oceanbase-powercontext.git
+cd oceanbase-powercontext/minimax
+python -m pip install -r requirements.txt
+export MINIMAX_API_KEY=<你的 Key>
+export SDD_DB_PORT=2881
+python validation/run_validation.py
+```
