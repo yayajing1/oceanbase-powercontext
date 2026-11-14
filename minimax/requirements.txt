@@ -1,0 +1,17 @@
+# 运行依赖（SDD 上下文模块）
+#
+#   python -m pip install -r requirements.txt
+#
+# 版本说明
+#   powercontext==1.2.0 —— 与本次开发、验证时完全一致的版本（进程内 Core SDK，
+#                          SQLite 文件后端）。其它 1.x 版本接口相同，但未在本作品上验证。
+#   pymysql              —— 连接 seekdb / OceanBase（MySQL 协议）。
+#   httpx                —— 调用 MiniMax API。
+#   pyyaml               —— 解析规格文件的 YAML front matter。
+#   pytest               —— 运行业务工程的测试。
+
+pymysql>=1.2,<1.3
+httpx>=0.28,<1
+pyyaml>=6,<7
+powercontext[builtin]==1.2.0
+pytest>=8,<10

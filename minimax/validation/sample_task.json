@@ -1,0 +1,39 @@
+{
+  "task_id": "TASK-ORD-003",
+  "title": "为 filter_orders 增加金额区间筛选",
+  "objective": "让 orderbook.filtering.filter_orders 支持 min_amount / max_amount 金额区间筛选，同时保持 SPEC-ORD-001 定义的 status / category 过滤语义与输出顺序不变。",
+  "task_text": "在 orderbook 项目中为 filter_orders 增加金额区间筛选能力。新增 min_amount 与 max_amount 两个可选关键字参数，默认均为 None；金额比较统一使用 decimal.Decimal，字符串金额按十进制字符串解析；min_amount 大于 max_amount 时抛出 ValueError。必须保持既有的 status 与 category 过滤语义（见 SPEC-ORD-001）以及输出顺序不变。本次需要修改的符号是 orderbook.filtering.filter_orders，对应文件 src/orderbook/filtering.py。验证方式是 tests/test_filter_amount.py 中的目标测试，tests/test_filter_status.py 与 tests/test_filter_category.py 是必须保持通过的回归测试。",
+  "target_tests": [
+    "tests/test_filter_amount.py"
+  ],
+  "regression_tests": [
+    "tests/test_filter_status.py",
+    "tests/test_filter_category.py"
+  ],
+  "expected": {
+    "description": "上下文中必须能定位到的来源。评审按这些来源核对上下文是否正确。",
+    "spec_entries": [
+      "SPEC-ORD-003.R1",
+      "SPEC-ORD-003.R2",
+      "SPEC-ORD-003.R3",
+      "SPEC-ORD-003.R4",
+      "SPEC-ORD-003.R5",
+      "SPEC-ORD-003.R6",
+      "SPEC-ORD-003.R7",
+      "SPEC-ORD-001.R1",
+      "SPEC-ORD-001.R2",
+      "SPEC-ORD-001.R3"
+    ],
+    "code": [
+      "src/orderbook/filtering.py::filter_orders"
+    ],
+    "tests": [
+      "tests/test_filter_amount.py::test_min_amount_keeps_orders_at_or_above_the_bound",
+      "tests/test_filter_amount.py::test_max_amount_keeps_orders_at_or_below_the_bound",
+      "tests/test_filter_amount.py::test_amount_bounds_accept_decimal_strings",
+      "tests/test_filter_amount.py::test_min_amount_greater_than_max_amount_raises_value_error",
+      "tests/test_filter_status.py::test_status_filters_to_matching_orders",
+      "tests/test_filter_category.py::test_category_filters_to_matching_orders"
+    ]
+  }
+}

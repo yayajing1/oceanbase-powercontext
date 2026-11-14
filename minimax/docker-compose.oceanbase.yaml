@@ -1,0 +1,44 @@
+# 用 OceanBase CE（社区版）提供 seekdb / OceanBase 服务。
+#
+#   docker compose -f docker-compose.oceanbase.yaml up -d
+#   # 等待健康检查通过（首次启动约 1~3 分钟）
+#   docker compose -f docker-compose.oceanbase.yaml ps
+#
+# 连接信息（写入 .env）：
+#   SDD_DB_HOST=127.0.0.1
+#   SDD_DB_PORT=2881
+#   SDD_DB_USER=root@test
+#   SDD_DB_PASSWORD=powercontext-demo
+#
+# 也可以直接使用已有的 seekdb / OceanBase 实例，或在 Linux 上使用
+# PowerContext 官方自测所用的嵌入式 seekdb（pylibseekdb）。
+
+services:
+  oceanbase:
+    image: ${SDD_OCEANBASE_IMAGE:-ghcr.io/oceanbase/oceanbase-ce:4.3.5.6-106000012026040916}
+    container_name: sdd-oceanbase
+    environment:
+      MODE: slim
+      OB_DATABASE: sdd_context
+      OB_TENANT_PASSWORD: powercontext-demo
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          obclient -h127.0.0.1 -P2881 -uroot@test -p$${OB_TENANT_PASSWORD}
+          -D$${OB_DATABASE} -e 'SELECT 1' >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 120
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - oceanbase-data:/root/ob
+    ports:
+      - "2881:2881"
+
+volumes:
+  oceanbase-data:

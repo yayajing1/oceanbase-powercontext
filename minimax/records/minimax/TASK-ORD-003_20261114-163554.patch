@@ -1,0 +1,48 @@
+--- a/src/orderbook/filtering.py
++++ b/src/orderbook/filtering.py
+@@ -2,5 +2,5 @@
+ 
+ from typing import Iterable, List, Optional
+ 
+-from .models import Order
++from .models import Order, to_decimal
+ 
+@@ -8,21 +8,35 @@
+ def filter_orders(
+     orders: Iterable[Order],
+     *,
+     status: Optional[str] = None,
+     category: Optional[str] = None,
++    min_amount: Optional[object] = None,
++    max_amount: Optional[object] = None,
+ ) -> List[Order]:
+-    """Return the orders that match ``status`` and ``category``.
++    """Return the orders that match the requested filters.
+ 
+     ``status`` and ``category`` are optional; when one of them is ``None``
+     the corresponding condition is not applied.  When both are given the
+-    conditions are combined with ``AND``.  The relative order of the
+-    returned orders always follows the input order.
++    conditions are combined with ``AND``.  ``min_amount`` and
++    ``max_amount`` are optional inclusive bounds.  The relative order of the
++    returned orders always follows the input order.
+     """
++    minimum = None if min_amount is None else to_decimal(min_amount)
++    maximum = None if max_amount is None else to_decimal(max_amount)
++    if minimum is not None and maximum is not None and minimum > maximum:
++        raise ValueError("min_amount must not be greater than max_amount")
++
+     matched: List[Order] = []
+     for order in orders:
+         if status is not None and order.status != status:
+             continue
+         if category is not None and order.category != category:
+             continue
++        if minimum is not None or maximum is not None:
++            amount = to_decimal(order.amount)
++            if minimum is not None and amount < minimum:
++                continue
++            if maximum is not None and amount > maximum:
++                continue
+         matched.append(order)
+     return matched

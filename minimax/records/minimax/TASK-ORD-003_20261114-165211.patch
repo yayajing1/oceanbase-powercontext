@@ -1,0 +1,53 @@
+--- a/src/orderbook/filtering.py
++++ b/src/orderbook/filtering.py
+@@ -9,7 +9,7 @@
+ from __future__ import annotations
+ 
+ from decimal import Decimal
+-from typing import Iterable, List, Optional
++from typing import Iterable, List, Optional, Union
+ 
+ from .models import Order
+ 
+ __all__ = ["filter_orders"]
+@@ -19,21 +19,37 @@
+ def filter_orders(
+     orders: Iterable[Order],
+     *,
+     status: Optional[str] = None,
+     category: Optional[str] = None,
++    min_amount: Optional[Union[str, Decimal]] = None,
++    max_amount: Optional[Union[str, Decimal]] = None,
+ ) -> List[Order]:
+-    """Return the orders that match ``status`` and ``category``.
++    """Return the orders that match the requested filters.
+ 
+     ``status`` and ``category`` are optional; when one of them is ``None``
+     the corresponding condition is not applied.  When both are given the
+-    conditions are combined with ``AND``.  The relative order of the
+-    returned orders always follows the input order.
++    conditions are combined with ``AND``.
++
++    ``min_amount`` and ``max_amount`` are inclusive bounds. ``None``
++    disables the corresponding bound, and decimal strings are parsed as
++    :class:`decimal.Decimal` values. The relative order of the returned
++    orders always follows the input order.
+     """
++    minimum = Decimal(str(min_amount)) if min_amount is not None else None
++    maximum = Decimal(str(max_amount)) if max_amount is not None else None
++    if minimum is not None and maximum is not None and minimum > maximum:
++        raise ValueError("min_amount must not be greater than max_amount")
++
+     matched: List[Order] = []
+     for order in orders:
+         if status is not None and order.status != status:
+             continue
+         if category is not None and order.category != category:
+             continue
++        amount = Decimal(str(order.amount))
++        if minimum is not None and amount < minimum:
++            continue
++        if maximum is not None and amount > maximum:
++            continue
+         matched.append(order)
+     return matched

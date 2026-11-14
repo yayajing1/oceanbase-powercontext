@@ -1,0 +1,54 @@
+--- a/src/orderbook/filtering.py
++++ b/src/orderbook/filtering.py
+@@ -11,7 +11,7 @@
+ from decimal import Decimal
+-from typing import Iterable, List, Optional
++from typing import Iterable, List, Optional, Union
+ 
+-from .models import Order
++from .models import Order, to_decimal
+ 
+ __all__ = ["filter_orders"]
+ 
+@@ -19,13 +19,16 @@
+ def filter_orders(
+     orders: Iterable[Order],
+     *,
+     status: Optional[str] = None,
+     category: Optional[str] = None,
++    min_amount: Optional[Union[Decimal, str]] = None,
++    max_amount: Optional[Union[Decimal, str]] = None,
+ ) -> List[Order]:
+-    """Return the orders that match ``status`` and ``category``.
++    """Return the orders that match the requested filters.
+ 
+-    ``status`` and ``category`` are optional; when one of them is ``None``
+-    the corresponding condition is not applied.  When both are given the
+-    conditions are combined with ``AND``.  The relative order of the
+-    returned orders always follows the input order.
++    ``status`` and ``category`` are optional; when one is ``None`` the
++    corresponding condition is not applied.  ``min_amount`` and ``max_amount``
++    are inclusive bounds and may be ``Decimal`` values or decimal strings.
++    All supplied conditions are combined with ``AND``.  The relative order
++    of the returned orders always follows the input order.
+     """
+@@ -32,8 +35,19 @@
++    min_bound = None if min_amount is None else to_decimal(min_amount)
++    max_bound = None if max_amount is None else to_decimal(max_amount)
++    if min_bound is not None and max_bound is not None and min_bound > max_bound:
++        raise ValueError("min_amount must not be greater than max_amount")
++
+     matched: List[Order] = []
+     for order in orders:
+         if status is not None and order.status != status:
+             continue
+         if category is not None and order.category != category:
+             continue
++        if min_bound is not None or max_bound is not None:
++            amount = to_decimal(order.amount)
++            if min_bound is not None and amount < min_bound:
++                continue
++            if max_bound is not None and amount > max_bound:
++                continue
+         matched.append(order)
+     return matched
