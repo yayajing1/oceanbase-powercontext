@@ -144,19 +144,42 @@ def check_database() -> None:
                     break
             if sample:
                 t, c = sample
+
+                def _bigrams(word: str) -> list:
+                    """中文连续片段的二元切分（与 ngram 解析器的 token_size=2 对齐）。"""
+                    out = []
+                    for run in re.findall(r"[\u4e00-\u9fff]+", word):
+                        if len(run) == 1:
+                            out.append(run)
+                        else:
+                            out += [run[i:i + 2] for i in range(len(run) - 1)]
+                    return out
+
                 hit = None
                 for kw in ("对比学习", "检索增强", "图神经网络", "掌握度"):
-                    try:
-                        rows = query(cur, "select count(*) from `%s` where match(%s) against(%%s in boolean mode)"
-                                     % (t, "`%s`" % c), ("%" + kw + "%",))
-                        n = int(rows[0][0])
-                    except Exception:
-                        n = 0
-                    if n > 0:
-                        hit = (kw, n)
+                    # 不同解析器对查询串的切分方式不同，逐个尝试，直到有一种能命中。
+                    forms = [
+                        ("原词", kw),
+                        ("通配", "%" + kw + "%"),
+                        ("二元AND", " ".join("+" + g for g in _bigrams(kw))),
+                        ("二元OR", " ".join(_bigrams(kw))),
+                    ]
+                    for label, expr in forms:
+                        try:
+                            rows = query(cur, "select count(*) from `%s` where match(%s) against(%%s in boolean mode)"
+                                         % (t, "`%s`" % c), (expr,))
+                            n = int(rows[0][0])
+                        except Exception:
+                            n = 0
+                        if n > 0:
+                            hit = (kw, n, label, expr)
+                            break
+                    if hit:
                         break
                 if hit:
-                    record("A3", "PASS", f"中文关键词「{hit[0]}」全文命中 {hit[1]} 条（表 `{t}`）")
+                    record("A3", "PASS",
+                           f"中文关键词「{hit[0]}」全文命中 {hit[1]} 条"
+                           f"（表 `{t}` 列 `{c}`，查询形式：{hit[2]} = `{hit[3]}`）")
                 else:
                     record("A3", "FAIL", f"中文关键词全文检索无命中（表 `{t}` 列 `{c}`）")
             else:

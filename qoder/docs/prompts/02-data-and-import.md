@@ -5,6 +5,11 @@
 ```text
 按 `qoder/docs/technical-design.md` 的设计开始实现。本轮只做「数据层 + 文献导入」：
 
+0. **先读 `qoder/docs/fts-facts.md`**：那是本机 seekdb（`127.0.0.1:2882`，
+   `5.7.25-OceanBase seekdb-v1.4.0.0`）上**实测**出来的中文全文索引结论，
+   技术设计文档 2.3.2 节里的假设与实测不符。建全文索引时必须按实测结论来：
+   默认 `space` 解析器切不动中文，要用 `WITH PARSER ngram`（`ngram_token_size=2`）。
+
 1. 在 `qoder/paperdesk/` 下建立 Python 包 `paperdesk`，实现：
    - 配置读取（环境变量 + 可选 `.env`），数据库连接与建表（seekdb / OceanBase，MySQL 协议）；
    - 表设计按技术设计文档落地，块字段必须建**原生全文索引**，保证中文关键词能被 MATCH 命中。
@@ -24,5 +29,4 @@
 - 这一轮先不要做检索、卡片、复习、记忆、提纲。
 
 完成后说明：建了哪几张表、全文索引的建法、幂等是怎么实现的。
-
 ```
