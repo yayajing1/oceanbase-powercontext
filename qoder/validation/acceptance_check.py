@@ -223,18 +223,25 @@ def check_database() -> None:
             record("A7", "FAIL", "未识别到卡片表（应含 question / method / conclusion 等字段）")
 
         # A8 导入幂等：重复导入后块数不变
+        # 判定口径：第 1 次导入后的块数必须与第 2 次导入后的块数相等。
+        # （不能拿「导入前」的块数比较——第一次导入本来就会把块写进去。）
         if chunk_table:
-            try:
-                before = int(query(cur, "select count(*) from `%s`" % chunk_table)[0][0])
-            except Exception:
-                before = 0
+            def _count_chunks() -> int:
+                try:
+                    with conn.cursor() as c2:
+                        c2.execute("select count(*) from `%s`" % chunk_table)
+                        return int(c2.fetchone()[0])
+                except Exception:
+                    return -1
+
             env = dict(os.environ)
             env["PYTHONPATH"] = PACKAGE + os.pathsep + env.get("PYTHONPATH", "")
             env["PYTHONUTF8"] = "1"
             notes = os.path.join(QODER, "data", "sample_notes")
+            counts = []
             ok = True
             detail = ""
-            for _ in range(2):
+            for round_no in (1, 2):
                 try:
                     proc = subprocess.run(
                         [sys.executable, "-m", "paperdesk", "import", notes],
@@ -246,19 +253,20 @@ def check_database() -> None:
                     break
                 if proc.returncode != 0:
                     ok = False
-                    detail = f"`import` 退出码 {proc.returncode}"
+                    detail = (f"第 {round_no} 次 `import` 退出码 {proc.returncode}"
+                              f"：{(proc.stderr or proc.stdout or '').strip()[-200:]}")
                     break
+                counts.append(_count_chunks())
             if not ok:
                 record("A8", "FAIL", detail)
+            elif len(counts) == 2 and counts[0] == counts[1] and counts[1] > 0:
+                record("A8", "PASS",
+                       f"连续两次导入，块数保持 {counts[1]} 条（幂等）")
+            elif len(counts) == 2:
+                record("A8", "FAIL",
+                       f"两次导入块数不一致：第 1 次 {counts[0]} 条，第 2 次 {counts[1]} 条，未幂等")
             else:
-                try:
-                    after = int(query(cur, "select count(*) from `%s`" % chunk_table)[0][0])
-                except Exception:
-                    after = -1
-                if before == after:
-                    record("A8", "PASS", f"重复导入两次，块数保持 {after} 条（幂等）")
-                else:
-                    record("A8", "FAIL", f"重复导入后块数从 {before} 变为 {after}，未幂等")
+                record("A8", "FAIL", "导入未执行成功，无法判定幂等")
         else:
             record("A8", "SKIP", "无全文索引表，无法定位块表")
     conn.close()
