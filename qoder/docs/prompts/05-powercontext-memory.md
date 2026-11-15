@@ -5,6 +5,19 @@
 ```text
 继续实现「记忆与跨会话复用」，这一轮接入 **PowerContext**：
 
+0. **先读 `qoder/docs/powercontext-facts.md`**：那是本机 `powercontext 1.2.0`
+   **实际跑通**的接法（技术设计 3.1 节的伪代码与真实 API 有出入）。关键点：
+   - `open_builtin_runtime` 是**异步上下文管理器**，第一个参数是 `BuiltinConfig`；
+   - `SQLiteConfig` 用 `url="sqlite+aiosqlite:///..."`，**没有 `path` 字段**；
+   - 写之前必须先 `await rt.scopes.bootstrap_default()` 拿 `scope_id`，
+     否则报 `ScopeNotFoundError`；`scope_id` 是随机的，读回时用
+     `await rt.scopes.default_scope()` 重新取，**不要写死**；
+   - `CaptureSource(source_id=..., content=..., metadata=...)` 三个字段都必填；
+   - `RememberMemoryRequest(entries=(MemoryEntryInput(kind=..., text=...),))`；
+   - 检索记忆用 `SearchMemoryRequest(query=..., mode="fts")`，中文可被 FTS 命中
+     （实测 `matched_by=('fts',)`），不要依赖需要模型的 `auto` 语义检索；
+   - 落盘文件建议 `qoder/.state/powercontext.db`（该目录已在 `.gitignore` 里）。
+
 1. 用 PowerContext（进程内 Core SDK：`powercontext.builtin.runtime.open_builtin_runtime`，
    文件后端，默认落在 `qoder/.state/powercontext.db`）保存三类记忆：
    - **用户画像**：研究方向、常用标签、当前在写的综述主题；
@@ -21,5 +34,4 @@
 PowerContext 是赛题指定的必选技术，必须真实参与功能，不能只装组件测连接。
 请在代码注释或 docstring 里写明：PowerContext 存的是「关于你的记忆」，
 seekdb 存的是「资料」，两者分工清晰。
-
 ```
