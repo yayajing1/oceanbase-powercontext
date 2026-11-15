@@ -7,6 +7,9 @@
 
 1. **综述提纲**：按标签 / 年份 / 作者聚合已有卡片，输出结构化 Markdown 提纲，
    每条提纲后面附上支撑它的卡片（标题 + 出处）。
+   按技术设计文档新建 `qoder/paperdesk/outline.py`
+   （`build_outline(db, by, filters, profile) -> OutlineDoc` 与纯函数
+   `render_markdown(doc) -> str`）。
 2. **CLI 入口**（`python -m paperdesk`），子命令至少包括：
    `init-db` / `import` / `search` / `card` / `review` / `memory` / `outline` / `demo`。
    每个子命令都要有 `--help`，说明输入与输出。
@@ -23,5 +26,4 @@
 - 端到端脚本要能在干净环境按 `qoder/README.md` 的步骤跑通；
 - 本轮结束后，再补一份 `qoder/README.md`（运行环境、依赖版本、部署与接入方式、
   从安装到启动的完整步骤、测试命令、已知限制）。
-
 ```

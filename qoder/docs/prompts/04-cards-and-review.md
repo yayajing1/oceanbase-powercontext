@@ -8,8 +8,14 @@
 1. 卡片字段固定为：问题 / 方法 / 结论 / 与我的工作的关系 / 来源片段 id。
    - 生成卡片时如果**没有配置模型 API**（环境变量 `PAPERDESK_MODEL_API_KEY`、`PAPERDESK_MODEL_BASE_URL` 等），
      必须给出**明确提示**并允许用户手工填写，而不是静默产出空卡片；
-   - 模型调用做成可插拔：配置了就走模型，没配置就走「手工填写」路径，两条路径都要能用、都要能测。
+   - 模型调用做成可插拔：按技术设计文档新建 `qoder/paperdesk/llm.py`
+     （`ModelClient.from_env()`，未配置 Key 时返回 `None` 而不是空文本），
+     配置了就走模型，没配置就走「手工填写」路径，两条路径都要能用、都要能测。
 2. 卡片入库，可按卡片检索（正文 + 字段），可修改、可删除。
+   - 卡片表 `study_cards` 与 `card_tags` / `card_authors` 的字段**已经由 `db.py` 建好**
+     （`problem` / `method` / `conclusion` / `relation` / `mastery` / `last_score` /
+     `review_count` / `interval_days` / `ease_factor` / `next_review_at` /
+     `last_reviewed_at` / `in_queue` / `source_*`），直接用，不要再改表结构。
 3. 复习队列：
    - 卡片可加入队列；
    - 每次复习给 0~5 的掌握度评分，系统据此计算下次复习时间
@@ -18,5 +24,4 @@
 4. 补测试：卡片 CRUD、评分 → 下次复习时间的计算（含评分 0 的边界、跨天场景）。
 
 这一轮先不接 PowerContext，记忆留到下一轮。
-
 ```
