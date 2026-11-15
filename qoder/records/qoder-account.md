@@ -107,6 +107,42 @@ retryAfterSeconds: 60, serviceAvailable: true
 一致，且与是否并发、是否使用 IDE 客户端标识无关；单次会话连续排队 40 分钟
 （`queue_wait_elapsed_ms` 约 2.38×10⁶）仍无放行。
 
+**BYOK（自带密钥调用自定义模型）也不可用**：CLI 运行时状态里
+`customProvidersAccountAllowed = false`、`allow_byok = 0`，
+即 Free 套餐不开放自定义 Provider，无法用自带 API Key 绕过限流。
+
 **结论**：当前账号为基础额度为 0 的 Free 套餐，需要先领取赛题提供的
 「2000 Qoder CN Credits（1 个月 Pro 权益）」，推理通道才会正常放行。
 流水线脚本 `qoder_pipeline.py` 会在额度到位后自动继续执行全部开发阶段。
+
+### 4.1 解除限流的操作路径
+
+| 入口 | 地址 | 说明 |
+| --- | --- | --- |
+| 额度/用量页 | `https://qoder.com/account/usage` | 额度接口 `addOnQuota.detailUrl` 指向的页面，可查 Credits 余额与有效期 |
+| 套餐页 | `https://qoder.com/pricing` | Pro / Pro+ 订阅（Pro 含 2000 Credits/月） |
+| 账号设置 | `https://qoder.com/settings` → `Plan & Billing` | 官方 FAQ 给出的订阅管理入口 |
+| 大赛测评平台 | 赛题页面 | 赛题声明的「2000 Qoder CN Credits」通常由平台发放领取入口 |
+
+领取后 1~2 分钟内生效，可用以下命令自检：
+
+```powershell
+$worker='C:\Users\31217\AppData\Local\Programs\Qoder\resources\app.asar.unpacked\node_modules\@qoder-ai\qoder-agent-sdk\dist\_worker\qoder-worker-runtime.obf.mjs'
+$env:ELECTRON_RUN_AS_NODE='1'
+& 'C:\Users\31217\AppData\Local\Programs\Qoder\Qoder.exe' $worker status -o json
+```
+
+并复查额度（`userQuota.total` 应大于 0）：
+
+```powershell
+& 'D:\oceanbase work\_scratch\venv312\Scripts\python.exe' 'D:\oceanbase work\_scratch\probe_quota.py'
+```
+
+### 4.2 本机运行环境（已就绪）
+
+| 项 | 状态 |
+| --- | --- |
+| seekdb 实例 | `127.0.0.1:2882`，`5.7.25-OceanBase seekdb-v1.4.0.0`，进程 PID 33180 |
+| 项目库 | `paperdesk` 库已创建（空库，等 Qoder 建表） |
+| PowerContext | `powercontext 1.2.0` 已装在独立 venv（`powercontext.builtin.runtime.open_builtin_runtime`） |
+| Qoder CLI | 已登录（见第 3 节），仅缺推理额度 |
