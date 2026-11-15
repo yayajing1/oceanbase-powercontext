@@ -96,26 +96,33 @@ CLI 原本显示 `Not logged in. Run qodercli login to authenticate.`
  "addOnQuota":{"total":200.0,"used":0.0,"remaining":200.0,"unit":"credits"}}
 ```
 
-实测发起的每一次模型请求都被服务端排队：
+### 4.1 过程中的限流现象与最终结论
+
+初期每一次模型请求都被服务端排队：
 
 ```
 subCode: RESOURCE_LIMIT, isQueued: true, queueType: p4, queueCount: 1,
 retryAfterSeconds: 60, serviceAvailable: true
 ```
 
-该现象在 `auto` / `mmodel`（MiniMax-M3.1-Flash）/ `efficient` 三个 model key 上
-一致，且与是否并发、是否使用 IDE 客户端标识无关；单次会话连续排队 40 分钟
-（`queue_wait_elapsed_ms` 约 2.38×10⁶）仍无放行。
+排查过程（全部排除）：
 
-**BYOK（自带密钥调用自定义模型）也不可用**：CLI 运行时状态里
-`customProvidersAccountAllowed = false`、`allow_byok = 0`，
-即 Free 套餐不开放自定义 Provider，无法用自带 API Key 绕过限流。
+| 假设 | 验证方式 | 结果 |
+| --- | --- | --- |
+| 并发挤占 | 收敛到单会话 | 仍排队 |
+| 客户端标识差异 | `QODER_CLIENT_TYPE=10`（对齐 IDE） | 仍排队 |
+| 特定模型池拥塞 | 依次试 `auto` / `MiniMax-M3.1-Flash` / `efficient` / `Qwen3.8-Flash` / `DeepSeek-Flash` / `Sonus` / `Cantus` / `Ultimate` / `GLM-5.3-Flash` 九个 model key | 全部 `queueType p4` |
+| 鉴权/令牌有问题 | `qodercli status -o json` → `logged_in: true`；服务端 `auth.getUserInfo` 返回 200 并回写 uid/email/name | 鉴权完全正常 |
+| 可用自带密钥绕开 | CLI 运行时状态 `customProvidersAccountAllowed = false`、`allow_byok = 0` | Free 套餐不开放 BYOK |
 
-**结论**：当前账号为基础额度为 0 的 Free 套餐，需要先领取赛题提供的
-「2000 Qoder CN Credits（1 个月 Pro 权益）」，推理通道才会正常放行。
-流水线脚本 `qoder_pipeline.py` 会在额度到位后自动继续执行全部开发阶段。
+**最终结论**：这是**服务端模型池的排队**（`RESOURCE_LIMIT`），不是账号封禁或鉴权问题。
+2026-11-15 12:53 起队列开始放行，阶段 1 会话随即跑通并产出
+`qoder/docs/technical-design.md`；额度接口同步显示
+`addOnQuota: {total: 200, used: 2, remaining: 198}`，证明扣的是 add-on 额度。
+因此账号的 200 credits 加包额度**可以**支撑本项目的开发，不需要额外购买 Pro；
+后续阶段 2~7 在同一通道上正常推进。
 
-### 4.1 解除限流的操作路径
+### 4.2 解除限流的操作路径（若再次排队）
 
 | 入口 | 地址 | 说明 |
 | --- | --- | --- |
