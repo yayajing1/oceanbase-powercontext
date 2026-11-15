@@ -15,6 +15,15 @@
      `检索增强` → `+检索 +索增 +增强`，实测精确命中 p04/p05。
    - `EXPLAIN` 确认走的是 `TEXT RETRIEVAL SCAN`，原生索引确实被使用。
 
+0.1 **必须先修掉 `db.py` 的解析器顺序（上一轮遗留问题）**：
+   - 现在 `db.py` 里是 `PARSER_CANDIDATES = ("ik", "beng", "ngram", None)`，
+     探测会选中 `ik`，而线上库里已经建好的三个 FULLTEXT 索引也就是 `ik`
+     （`schema_meta.fulltext_parser = 'ik'`），实测 `ik` 下中文查 0 条。
+   - 请把 `ngram` 提到**最前面**（顺序改为 `("ngram", "ik", "beng", None)`），
+     并让 `init_schema()` 能识别「库里已有索引的解析器与目标解析器不一致」，
+     此时**先 DROP 旧索引再用目标解析器重建**，把结果写回 `schema_meta.fulltext_parser`。
+   - 重建后请实际执行一次 `init-db`，确认 `schema_meta.fulltext_parser` 变成 `ngram`。
+
 1. 一次查询同时使用两类能力，并把结果合并：
    - **关键词全文检索**：在 seekdb 的原生全文索引上做 MATCH，中文必须能命中；
    - **结构化条件过滤**：年份区间、标签（多选 OR）、作者。
