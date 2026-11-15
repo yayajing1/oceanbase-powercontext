@@ -1,0 +1,2 @@
+# 统一入口：实际依赖维护在 paperdesk/requirements.txt
+-r paperdesk/requirements.txt

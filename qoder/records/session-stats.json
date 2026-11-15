@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-11-15T15:16:24",
+  "sessions": [
+    {
+      "assistant_turns": 64,
+      "tool_calls": 42,
+      "first_at": 1794718906.434,
+      "last_at": 1794719213.989,
+      "session_id": "8a87a83f-56c3-4f2a-be04-63a847cb7d77",
+      "bytes": 550776,
+      "stage": "阶段 1 · 需求拆解 → technical-design.md"
+    },
+    {
+      "assistant_turns": 1,
+      "tool_calls": 0,
+      "first_at": 1794714501.379,
+      "last_at": 1794714501.379,
+      "session_id": "e1d89413-dc44-44b3-9f6e-cab007d6e3f6",
+      "bytes": 16384,
+      "stage": "其他会话"
+    },
+    {
+      "assistant_turns": 112,
+      "tool_calls": 68,
+      "first_at": 1794722577.843,
+      "last_at": 1794726341.674,
+      "session_id": "e7091f49-4fb7-4b97-9f5c-595fb57bcad2",
+      "bytes": 766483,
+      "stage": "阶段 2 · 数据层与文献导入"
+    }
+  ],
+  "cli_logs": 37
+}

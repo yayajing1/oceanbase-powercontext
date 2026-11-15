@@ -1,0 +1,10 @@
+# PaperDesk 数据层与文献导入的依赖
+#   python -m pip install -r qoder/paperdesk/requirements.txt
+#
+# pymysql  —— 连接 seekdb / OceanBase（MySQL 协议，默认端口 2882）
+# PyYAML   —— 解析 Markdown 笔记的 YAML front matter
+# pytest   —— 单元测试（不依赖数据库）
+
+pymysql>=1.1,<2
+PyYAML>=6,<7
+pytest>=8,<10
