@@ -119,10 +119,41 @@ retryAfterSeconds: 60, serviceAvailable: true
 2026-11-15 12:53 起队列开始放行，阶段 1 会话随即跑通并产出
 `qoder/docs/technical-design.md`；额度接口同步显示
 `addOnQuota: {total: 200, used: 2, remaining: 198}`，证明扣的是 add-on 额度。
-因此账号的 200 credits 加包额度**可以**支撑本项目的开发，不需要额外购买 Pro；
-后续阶段 2~7 在同一通道上正常推进。
+因此账号的 200 credits 加包额度**可以**支撑本项目的开发，不需要额外购买 Pro。
 
-### 4.2 解除限流的操作路径（若再次排队）
+### 4.2 排队的定量特征与流水线对策
+
+从 `~/.qoder/logs/runs/*/qodercli.log` 与 stream-json 转写里可以直接读到服务端的排队参数：
+
+| 字段 | 实测值 | 含义 |
+| --- | --- | --- |
+| `queue_type` | `p4` | Free 套餐的最低优先级通道 |
+| `queue_count` | `1` | 队列里只有本会话自己，说明不是并发挤占 |
+| `service_available` | `true` | 服务本身健康，纯粹是容量排队 |
+| `wait_time_ms` / `retryAfterSeconds` | `60000` | 客户端每 60 秒轮询一次队列状态 |
+| `queue_max_wait_ms` | `3600000` | **单次请求最长排队 60 分钟** |
+| `queue_wait_elapsed_ms` | 持续增长 | 同一个 `request_id` 一直排队，不会换号 |
+
+也就是说：一次请求最多要等 60 分钟才可能被放行，而**放行后会连续跑完一整轮
+agent 工具调用**（实测一轮约 20 次 Read/Write/Bash）才会再次入队。
+
+据此，驱动开发流水线的监督器（`_scratch/qoder_supervisor.py`）按下面的方式对抗排队：
+
+| 对策 | 做法 | 解决的具体问题 |
+| --- | --- | --- |
+| 超时窗口对齐 | 每阶段超时 `3900s` > 队列上限 `3600s` | 早期版本用 `2400s`，会在**还在排队时**就把 CLI 杀掉，白白丢掉队列位置 |
+| 断点续接 | 每阶段固定 session id，已存在则 `--resume` | 排队中断后 Qoder 保留上下文，不会从头再来 |
+| 续接提示词 | 重试时不再重复整段需求，改发「继续上一条任务 + 必产出文件清单」的短提示 | 避免 Qoder 重做已完成的模块，节省额度 |
+| 成功判定 | 以 Qoder **自己的会话库**（`~/.qoder/projects/<slug>/<session>.jsonl`）中的 assistant 轮次为准，stream-json 捕获文件只作辅助 | 一次 CLI 崩溃会截断捕获文件，曾导致「Qoder 其实做完了但流水线判定失败」 |
+| 进程互斥 | 启动前等待上一条 CLI 退出、并清理残留 worker | 同一 session id 被两个进程占用时 CLI 直接以 `exit 42 / Session ID not available` 退出 |
+| 断点续跑 | 阶段状态落盘到 `_scratch/qoder_pipeline_state.json` | 监督器随时可重启，已完成阶段不会重做 |
+
+另外一个佐证：`GET https://openapi.qoder.sh/api/v1/me/partner_plans` 返回 `[]`，
+说明本账号**尚未**关联任何「伙伴/赛事」套餐，赛题承诺的 2000 Qoder CN Credits
+还需要在大赛入口单独领取；领取后 `plan_tier_name` 应不再显示 `Free`，
+排队通道也可能随之提升。
+
+### 4.3 解除限流的操作路径（若再次排队）
 
 | 入口 | 地址 | 说明 |
 | --- | --- | --- |
@@ -145,11 +176,27 @@ $env:ELECTRON_RUN_AS_NODE='1'
 & 'D:\oceanbase work\_scratch\venv312\Scripts\python.exe' 'D:\oceanbase work\_scratch\probe_quota.py'
 ```
 
-### 4.2 本机运行环境（已就绪）
+### 4.4 本机运行环境（已就绪）
 
 | 项 | 状态 |
 | --- | --- |
 | seekdb 实例 | `127.0.0.1:2882`，`5.7.25-OceanBase seekdb-v1.4.0.0`，进程 PID 33180 |
 | 项目库 | `paperdesk` 库已创建（空库，等 Qoder 建表） |
 | PowerContext | `powercontext 1.2.0` 已装在独立 venv（`powercontext.builtin.runtime.open_builtin_runtime`） |
-| Qoder CLI | 已登录（见第 3 节），仅缺推理额度 |
+| Qoder CLI | 已登录（见第 3 节），推理走 Free 套餐的 p4 通道，排队见 4.2 |
+
+### 4.5 备选推理通道（若 p4 排队长期不放开）
+
+国际版 Free 套餐实测 `customProvidersAccountAllowed = false`、`allow_byok = 0`，
+不支持自带密钥。但**国内版 Qoder CN**（`qoder.cn`）的「个人社区版」是开放 BYOK 的，
+并且同样提供 Sites 发布能力，可作为备选通道：
+
+| 项 | 国际版 Qoder（本机在用） | 国内版 Qoder CN |
+| --- | --- | --- |
+| Free 套餐 BYOK | 不支持 | 个人社区版支持自带模型 Key |
+| Sites 发布 | 支持 | 支持 |
+| 推理排队 | Free 走 `p4` 通道 | 自带 Key 时直连模型，不经过 Qoder 模型池 |
+
+使用方式（需另行注册账号）：安装 Qoder CN → 在设置里配置模型服务商的 API Key →
+在「编程模式」里打开本仓库 → 用 `qoder/docs/prompts/` 里的提示词逐阶段执行。
+仓库内的提示词是**复制粘贴即可执行**的，不依赖任何私有脚本。
